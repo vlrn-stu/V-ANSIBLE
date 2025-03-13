@@ -1,0 +1,107 @@
+---
+- name: Deploy Wazuh on Proxmox using Alpine Linux and Docker Compose
+  hosts: localhost
+  gather_facts: false
+  vars_prompt:
+    - name: "vm_name"
+      prompt: "Enter the name of the VM"
+      default: "wazuh_vm"
+    - name: "vm_id"
+      prompt: "Enter the VM ID"
+      default: 100
+    - name: "vm_cores"
+      prompt: "Enter the number of CPU cores for the VM"
+      default: 2
+    - name: "vm_memory"
+      prompt: "Enter the memory size (in MB) for the VM"
+      default: 4096
+    - name: "vm_disk_size"
+      prompt: "Enter the disk size (e.g., 20G) for the VM"
+      default: "20G"
+    - name: "vm_storage"
+      prompt: "Enter the storage location for the VM (e.g., local-lvm)"
+      default: "local-lvm"
+    - name: "alpine_image"
+      prompt: "Enter the Alpine Linux image to use (e.g., alpine-3.18.0)"
+      default: "alpine-3.18.0"
+
+  tasks:
+    - name: Gather information about existing VMs
+      shell:
+        cmd: qm list --full
+      register: vm_list_output
+
+    - name: Display existing VMs
+      debug:
+        msg: "{{ vm_list_output.stdout_lines }}"
+
+    - name: Download Alpine Linux ISO if not already present
+      shell:
+        cmd: |
+          if [ ! -f /var/lib/vz/template/iso/{{ alpine_image }}.iso ]; then
+            wget https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/{{ alpine_image }}.iso -O /var/lib/vz/template/iso/{{ alpine_image }}.iso
+          fi
+
+    - name: Create a new VM on Proxmox
+      shell:
+        cmd: |
+          qm create {{ vm_id }} \
+            --name {{ vm_name }} \
+            --memory {{ vm_memory }} \
+            --cores {{ vm_cores }} \
+            --net0 virtio,bridge=vmbr0 \
+            --ide2 {{ vm_storage }}:iso/{{ alpine_image }}.iso,media=cdrom \
+            --scsihw virtio-scsi-pci \
+            --scsi0 {{ vm_storage }}:{{ vm_disk_size }}
+
+    - name: Set boot disk and enable boot for the VM
+      shell:
+        cmd: |
+          qm set {{ vm_id }} --boot c --bootdisk scsi0
+
+    - name: Start the VM
+      shell:
+        cmd: qm start {{ vm_id }}
+
+    - name: Install Docker and Docker Compose inside Alpine Linux via SSH
+      shell:
+        cmd: |
+          apk update && apk add docker docker-compose && \
+          rc-update add docker default && \
+          service docker start
+
+    - name: Set up automatic updates for Alpine Linux
+      shell:
+        cmd: echo '0 2 * * * apk update && apk upgrade' | crontab -
+
+    - name: Harden the Alpine Linux system
+      shell:
+        cmd: |
+          apk add audit logrotate bash-completion openssh-server && \
+          echo 'install cramfs /bin/true' >> /etc/modprobe.d/disable-filesystems.conf && \
+          echo 'install udf /bin/true' >> /etc/modprobe.d/disable-filesystems.conf && \
+          sysctl -w net.ipv4.ip_forward=0
+
+    - name: Deploy Wazuh using Docker Compose
+      copy:
+        dest: /root/docker-compose.yml
+        content: |
+          version: '3'
+          services:
+            wazuh-manager:
+              image: wazuh/wazuh-manager
+              container_name: wazuh-manager
+              ports:
+                - "1514/udp"
+                - "55000/tcp"
+            wazuh-dashboard:
+              image: wazuh/wazuh-dashboard
+              container_name: wazuh-dashboard
+              ports:
+                - "443/tcp"
+
+    - name: Start Wazuh using Docker Compose
+      shell:
+        cmd:
+          docker-compose -f /root/docker-compose.yml up -d
+
