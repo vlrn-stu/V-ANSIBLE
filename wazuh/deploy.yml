@@ -1,7 +1,5 @@
 ---
-# wazuh-proxmox-deployment.yml
-# Ansible playbook to deploy Wazuh on Proxmox using Alpine Linux and Docker Compose
-
+# Complete automated Wazuh deployment on Proxmox
 - name: Deploy Wazuh on Proxmox using Alpine Linux and Docker Compose
   hosts: localhost
   gather_facts: false
@@ -24,130 +22,86 @@
     - name: "vm_storage"
       prompt: "Enter the storage location for the VM (e.g., local-lvm)"
       default: "local-lvm"
-    - name: "alpine_iso_url"
-      prompt: "Enter the Alpine Linux ISO URL to use"
-      default: "https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-standard-3.18.0-x86_64.iso"
     - name: "vm_ip"
       prompt: "Enter the IP address for the VM"
-      private: no
-    - name: "vm_root_password"
+      default: "192.168.1.100"
+    - name: "vm_netmask"
+      prompt: "Enter the netmask for the VM"
+      default: "24"
+    - name: "vm_gateway"
+      prompt: "Enter the gateway for the VM"
+      default: "192.168.1.1"
+    - name: "vm_password"
       prompt: "Enter the root password for the VM"
       private: yes
-  
+      default: "wazuh2024"
+      
   vars:
-    alpine_iso_name: "alpine-3.18.iso"
+    ubuntu_image_url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+    ubuntu_image_name: "ubuntu-22.04.img"
     
   tasks:
-    - name: Gather information about existing VMs
-      shell: qm list
-      register: vm_list_output
-      changed_when: false
-    
-    - name: Display existing VMs
-      debug:
-        msg: "{{ vm_list_output.stdout_lines }}"
-    
-    - name: Check if Alpine Linux ISO already exists
-      stat:
-        path: "/var/lib/vz/template/iso/{{ alpine_iso_name }}"
-      register: iso_file
-    
-    - name: Download Alpine Linux ISO if not already present
-      get_url:
-        url: "{{ alpine_iso_url }}"
-        dest: "/var/lib/vz/template/iso/{{ alpine_iso_name }}"
-        mode: '0644'
-      when: not iso_file.stat.exists
-    
-    - name: Verify ISO file exists in Proxmox storage
-      stat:
-        path: "/var/lib/vz/template/iso/{{ alpine_iso_name }}"
-      register: iso_check
-      failed_when: not iso_check.stat.exists
-    
     - name: Check if VM with specified ID already exists
       shell: qm status {{ vm_id }} 2>/dev/null || echo "NotFound"
       register: vm_exists
       changed_when: false
       failed_when: false
-    
-    - name: Create VM without disks first
+      
+    - name: Stop and destroy VM if it exists
+      shell: qm stop {{ vm_id }} && sleep 5 && qm destroy {{ vm_id }} --purge
+      when: "'NotFound' not in vm_exists.stdout"
+      ignore_errors: yes
+      
+    - name: Download Ubuntu cloud image
+      get_url:
+        url: "{{ ubuntu_image_url }}"
+        dest: "/tmp/{{ ubuntu_image_name }}"
+        mode: '0644'
+        
+    - name: Create new VM
       shell: |
         qm create {{ vm_id }} \
           --name {{ vm_name }} \
           --memory {{ vm_memory }} \
           --cores {{ vm_cores }} \
-          --net0 virtio,bridge=vmbr0 \
-          --ide2 local:iso/{{ alpine_iso_name }},media=cdrom \
-          --scsihw virtio-scsi-pci \
-          --boot c \
-          --serial0 socket \
-          --vga serial0
-      when: "'NotFound' in vm_exists.stdout"
+          --net0 virtio,bridge=vmbr0
       register: vm_created
-    
-    - name: Create disk for VM
-      shell: |
-        # Prepare disk name with proper path replacement
-        DISK_NAME="{{ vm_storage }}:{{ vm_disk_size }}"
         
-        # Create disk using direct volume creation
-        qm set {{ vm_id }} --scsi0 $DISK_NAME
-      when: vm_created is defined and vm_created.changed
-      register: disk_created
-      ignore_errors: yes
-    
-    - name: Alternative disk creation method
+    - name: Import disk from Ubuntu cloud image
       shell: |
-        # Create a disk using the storage allocation method
-        DISK_ID="vm-{{ vm_id }}-disk-0"
-        pvesm allocate {{ vm_storage }} $DISK_ID {{ vm_disk_size }}
+        qm importdisk {{ vm_id }} /tmp/{{ ubuntu_image_name }} {{ vm_storage }}
+      register: disk_imported
         
-        # Attach the disk to the VM
-        qm set {{ vm_id }} --scsi0 {{ vm_storage }}:$DISK_ID
-      when: disk_created is defined and disk_created.failed
+    - name: Attach the imported disk to the VM
+      shell: |
+        qm set {{ vm_id }} --scsihw virtio-scsi-pci --scsi0 {{ vm_storage }}:vm-{{ vm_id }}-disk-0
+      
+    - name: Add cloud-init drive
+      shell: |
+        qm set {{ vm_id }} --ide2 {{ vm_storage }}:cloudinit
+      
+    - name: Configure cloud-init for user, password and network
+      shell: |
+        qm set {{ vm_id }} \
+          --ciuser root \
+          --cipassword {{ vm_password }} \
+          --ipconfig0 ip={{ vm_ip }}/{{ vm_netmask }},gw={{ vm_gateway }}
     
-    - name: Set boot options
+    - name: Configure boot order
       shell: |
         qm set {{ vm_id }} --boot c --bootdisk scsi0
-      when: vm_created is defined and vm_created.changed
+    
+    - name: Resize disk to specified size
+      shell: |
+        qm resize {{ vm_id }} scsi0 {{ vm_disk_size }}
     
     - name: Start the VM
-      shell: qm start {{ vm_id }}
-      when: vm_created is defined and vm_created.changed
-      register: vm_started
+      shell: |
+        qm start {{ vm_id }}
     
-    - name: Wait for VM to complete initial boot (30 seconds)
+    - name: Wait for VM to complete boot (60 seconds)
       pause:
-        seconds: 30
-      when: vm_started is defined and vm_started.changed
-    
-    # This creates a template for the basic Alpine installation
-    # The next steps require manual installation first time, after which we can use
-    # subsequent automation to configure
-    
-    - name: Provide instructions for Alpine Linux installation
-      debug:
-        msg: |
-          Please complete the Alpine Linux installation manually:
-          
-          1. Log in to the Proxmox console for VM {{ vm_id }}
-          2. Log in with 'root' (no password)
-          3. Run 'setup-alpine' and follow the prompts
-          4. Configure network with IP: {{ vm_ip }}
-          5. Set root password to your secure password
-          6. When prompted for disk setup, choose 'sys' option
-          7. For target disk, select 'sda' or 'scsi0'
-          8. Choose 'y' to erase the disk
-          9. Complete installation and reboot
-          
-          After completing installation, press Enter to continue with automation.
-      when: vm_started is defined and vm_started.changed
-    
-    - name: Wait for user to complete Alpine installation
-      pause:
-        prompt: "Press Enter after you've completed the Alpine Linux installation"
-      when: vm_started is defined and vm_started.changed
+        seconds: 60
     
     - name: Wait for SSH to become available
       wait_for:
@@ -155,56 +109,23 @@
         port: 22
         delay: 10
         timeout: 300
-      when: vm_ip is defined
     
-    - name: Add Alpine VM to inventory
-      add_host:
-        name: "alpine_vm"
-        ansible_host: "{{ vm_ip }}"
-        ansible_user: "root"
-        ansible_password: "{{ vm_root_password }}"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-      when: vm_ip is defined and vm_root_password is defined
-
-- name: Configure Alpine Linux and Deploy Wazuh
-  hosts: alpine_vm
-  gather_facts: false
-  
-  tasks:
-    - name: Update Alpine package repositories
-      raw: apk update
+    - name: Add SSH public key to known_hosts
+      shell: |
+        ssh-keyscan -H {{ vm_ip }} >> ~/.ssh/known_hosts
       ignore_errors: yes
     
-    - name: Install Python for Ansible
-      raw: apk add python3
-      ignore_errors: yes
-    
-    - name: Install essential packages
-      raw: apk add docker docker-compose curl bash bash-completion sudo logrotate coreutils openssh
-      ignore_errors: yes
-    
-    - name: Configure Docker to start on boot
-      raw: rc-update add docker default
-      ignore_errors: yes
-    
-    - name: Start Docker service
-      raw: service docker start
-      ignore_errors: yes
-    
+    - name: Install Docker and Docker Compose
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "apt-get update && apt-get install -y docker.io docker-compose"
+      
     - name: Create Wazuh directory
-      raw: mkdir -p /opt/wazuh
-    
-    - name: Configure automatic updates
-      raw: |
-        cat << 'EOF' > /etc/periodic/daily/system-update
-        #!/bin/sh
-        apk update && apk upgrade -y
-        EOF
-        chmod +x /etc/periodic/daily/system-update
-    
-    - name: Deploy Wazuh Docker Compose file
-      raw: |
-        cat << 'EOF' > /opt/wazuh/docker-compose.yml
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "mkdir -p /opt/wazuh"
+
+    - name: Copy Docker Compose configuration
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cat > /opt/wazuh/docker-compose.yml << 'EOF'
         version: '3'
         services:
           wazuh-manager:
@@ -213,9 +134,9 @@
             hostname: wazuh-manager
             restart: always
             ports:
-              - "1514:1514/udp"
-              - "1515:1515"
-              - "55000:55000"
+              - '1514:1514/udp'
+              - '1515:1515'
+              - '55000:55000'
             volumes:
               - wazuh_api_configuration:/var/ossec/api/configuration
               - wazuh_etc:/var/ossec/etc
@@ -240,9 +161,9 @@
             hostname: wazuh-indexer
             restart: always
             ports:
-              - "9200:9200"
+              - '9200:9200'
             environment:
-              - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+              - 'OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m'
             ulimits:
               memlock:
                 soft: -1
@@ -259,7 +180,7 @@
             hostname: wazuh-dashboard
             restart: always
             ports:
-              - "443:5601"
+              - '443:5601'
             environment:
               - INDEXER_USERNAME=admin
               - INDEXER_PASSWORD=SecretPassword
@@ -283,19 +204,23 @@
           filebeat_etc:
           filebeat_var:
           wazuh-indexer-data:
-        EOF
-    
+        EOF"
+
     - name: Start Wazuh using Docker Compose
-      raw: cd /opt/wazuh && docker-compose up -d
-    
-    - name: Show Wazuh deployment info
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker-compose up -d"
+
+    - name: Verify Wazuh services are running
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker-compose ps"
+      register: wazuh_status
+      
+    - name: Display Wazuh deployment information
       debug:
         msg: |
           Wazuh has been successfully deployed:
           
-          - Wazuh Dashboard: https://{{ ansible_host }}
-            - Default credentials: admin/SecretPassword
+          Wazuh Dashboard: https://{{ vm_ip }}
+          Default credentials: admin/SecretPassword
           
-          - Wazuh Manager: {{ ansible_host }}:55000
-          
-          Please change the default passwords for production use.
+          Wazuh Manager: {{ vm_ip }}:55000
