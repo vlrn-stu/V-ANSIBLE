@@ -5,7 +5,7 @@
   vars_prompt:
     - name: "vm_name"
       prompt: "Enter the name of the VM"
-      default: "wazuh_vm"
+      default: "wazuh"
     - name: "vm_id"
       prompt: "Enter the VM ID"
       default: 100
