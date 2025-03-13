@@ -1,4 +1,3 @@
----
 - name: Deploy Wazuh on Proxmox using Alpine Linux and Docker Compose
   hosts: localhost
   gather_facts: false
@@ -65,7 +64,7 @@
             --net0 virtio,bridge=vmbr0 \
             --ide2 local:iso/{{ alpine_iso_name }},media=cdrom \
             --scsihw virtio-scsi-pci \
-            --scsi0 {{ vm_storage }}:{{ vm_disk_size }}
+            --scsi0 {{ vm_storage }},size={{ vm_disk_size }}
 
     - name: Set boot disk and enable boot for the VM
       shell:
@@ -117,4 +116,3 @@
       shell:
         cmd:
           docker-compose -f /root/docker-compose.yml up -d
-
