@@ -1,6 +1,6 @@
 ---
 # Complete automated Wazuh deployment on Proxmox
-- name: Deploy Wazuh on Proxmox using Alpine Linux and Docker Compose
+- name: Deploy Wazuh on Proxmox using Ubuntu and Docker Compose
   hosts: localhost
   gather_facts: false
   vars_prompt:
@@ -41,6 +41,11 @@
     ubuntu_image_name: "ubuntu-22.04.img"
     
   tasks:
+    - name: Install necessary packages on Proxmox host
+      shell: |
+        apt-get update && apt-get install -y sshpass wget
+      become: yes
+      
     - name: Check if VM with specified ID already exists
       shell: qm status {{ vm_id }} 2>/dev/null || echo "NotFound"
       register: vm_exists
@@ -57,6 +62,7 @@
         url: "{{ ubuntu_image_url }}"
         dest: "/tmp/{{ ubuntu_image_name }}"
         mode: '0644'
+        force: no
         
     - name: Create new VM
       shell: |
@@ -84,8 +90,10 @@
       shell: |
         qm set {{ vm_id }} \
           --ciuser root \
-          --cipassword {{ vm_password }} \
-          --ipconfig0 ip={{ vm_ip }}/{{ vm_netmask }},gw={{ vm_gateway }}
+          --cipassword "{{ vm_password }}" \
+          --ipconfig0 ip={{ vm_ip }}/{{ vm_netmask }},gw={{ vm_gateway }} \
+          --sshkeys /root/.ssh/authorized_keys
+      ignore_errors: yes
     
     - name: Configure boot order
       shell: |
@@ -99,31 +107,62 @@
       shell: |
         qm start {{ vm_id }}
     
-    - name: Wait for VM to complete boot (60 seconds)
+    - name: Wait for VM to boot (120 seconds)
       pause:
-        seconds: 60
+        seconds: 120
     
     - name: Wait for SSH to become available
       wait_for:
         host: "{{ vm_ip }}"
         port: 22
+        state: started
         delay: 10
         timeout: 300
     
-    - name: Add SSH public key to known_hosts
+    - name: Add SSH key to known_hosts
       shell: |
         ssh-keyscan -H {{ vm_ip }} >> ~/.ssh/known_hosts
       ignore_errors: yes
     
-    - name: Install Docker and Docker Compose
+    - name: Configure SSH connection to avoid host key checking
       shell: |
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "apt-get update && apt-get install -y docker.io docker-compose"
+        mkdir -p ~/.ssh
+        echo "Host {{ vm_ip }}
+          StrictHostKeyChecking no
+          UserKnownHostsFile=/dev/null" > ~/.ssh/config
+      
+    - name: Wait for cloud-init to complete
+      shell: |
+        timeout 180 bash -c 'until sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cloud-init status --wait"; do sleep 10; done'
+      ignore_errors: yes
+    
+    - name: Wait for apt to be available on VM
+      shell: |
+        for i in $(seq 1 30); do
+          if sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "which apt"; then
+            exit 0
+          fi
+          echo "Waiting for apt to be available... attempt $i/30"
+          sleep 5
+        done
+        exit 1
+      ignore_errors: yes
+    
+    - name: Install Docker with curl method (more reliable)
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "apt-get update && apt-get install -y curl && curl -fsSL https://get.docker.com | sh"
+      ignore_errors: no
+      
+    - name: Install Docker Compose
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "apt-get install -y docker-compose-plugin"
+      ignore_errors: no
       
     - name: Create Wazuh directory
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "mkdir -p /opt/wazuh"
 
-    - name: Copy Docker Compose configuration
+    - name: Create Docker Compose file
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cat > /opt/wazuh/docker-compose.yml << 'EOF'
         version: '3'
@@ -149,11 +188,6 @@
               - wazuh_wodles:/var/ossec/wodles
               - filebeat_etc:/etc/filebeat
               - filebeat_var:/var/lib/filebeat
-            environment:
-              - INDEXER_URL=https://wazuh-indexer:9200
-              - INDEXER_USERNAME=admin
-              - INDEXER_PASSWORD=SecretPassword
-              - FILEBEAT_SSL_VERIFICATION=none
           
           wazuh-indexer:
             image: wazuh/wazuh-indexer:4.5.1
@@ -206,15 +240,11 @@
           wazuh-indexer-data:
         EOF"
 
-    - name: Start Wazuh using Docker Compose
+    - name: Deploy Wazuh using Docker Compose
       shell: |
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker-compose up -d"
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker compose up -d"
+      ignore_errors: no
 
-    - name: Verify Wazuh services are running
-      shell: |
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker-compose ps"
-      register: wazuh_status
-      
     - name: Display Wazuh deployment information
       debug:
         msg: |
