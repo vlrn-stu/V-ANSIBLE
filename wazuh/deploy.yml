@@ -45,6 +45,16 @@
             wget {{ alpine_iso_url }} -O /var/lib/vz/template/iso/{{ alpine_iso_name }}
           fi
 
+    - name: Verify ISO file exists in Proxmox storage
+      shell:
+        cmd: ls /var/lib/vz/template/iso/{{ alpine_iso_name }}
+      register: iso_check
+
+    - name: Fail if ISO file does not exist
+      fail:
+        msg: "ISO file {{ alpine_iso_name }} not found in /var/lib/vz/template/iso/. Ensure it is downloaded correctly."
+      when: iso_check.rc != 0
+
     - name: Create a new VM on Proxmox
       shell:
         cmd: |
