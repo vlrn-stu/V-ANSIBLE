@@ -16,14 +16,14 @@
       prompt: "Enter the memory size (in MB) for the VM"
       default: 4096
     - name: "vm_disk_size"
-      prompt: "Enter the disk size (e.g., 20G) for the VM"
+      prompt: "Enter the disk size for the VM"
       default: "20G"
     - name: "vm_storage"
-      prompt: "Enter the storage location for the VM (e.g., local-lvm)"
+      prompt: "Enter the storage location for the VM"
       default: "local-lvm"
     - name: "alpine_image"
-      prompt: "Enter the Alpine Linux image to use (e.g., alpine-3.18.0)"
-      default: "alpine-3.18.0"
+      prompt: "Enter the Alpine Linux image to use"
+      default: "3.18.0"
 
   tasks:
     - name: Gather information about existing VMs
@@ -38,8 +38,8 @@
     - name: Download Alpine Linux ISO if not already present
       shell:
         cmd: |
-          if [ ! -f /var/lib/vz/template/iso/{{ alpine_image }}.iso ]; then
-            wget https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/{{ alpine_image }}.iso -O /var/lib/vz/template/iso/{{ alpine_image }}.iso
+          if [ ! -f /var/lib/vz/template/iso/alpine-standard-{{ alpine_image }}-x86_64.iso ]; then
+            wget https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-standard-{{ alpine_image }}-x86_64.iso -O /var/lib/vz/template/iso/alpine-standard-{{ alpine_image }}-x86_64.iso
           fi
 
     - name: Create a new VM on Proxmox
