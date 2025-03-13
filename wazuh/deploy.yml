@@ -16,14 +16,17 @@
       prompt: "Enter the memory size (in MB) for the VM"
       default: 4096
     - name: "vm_disk_size"
-      prompt: "Enter the disk size for the VM"
+      prompt: "Enter the disk size for the VM (e.g., 20G)"
       default: "20G"
     - name: "vm_storage"
-      prompt: "Enter the storage location for the VM"
+      prompt: "Enter the storage location for the VM (e.g., local-lvm)"
       default: "local-lvm"
-    - name: "alpine_image_version"
-      prompt: "Enter the Alpine Linux version to use (e.g., 3.18.0)"
-      default: "3.18.0"
+    - name: "alpine_iso_url"
+      prompt: "Enter the Alpine Linux ISO URL to use"
+      default: "https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-standard-3.18.0-x86_64.iso"
+
+  vars:
+    alpine_iso_name: "alpine-3.18.iso"
 
   tasks:
     - name: Gather information about existing VMs
@@ -38,9 +41,8 @@
     - name: Download Alpine Linux ISO if not already present and rename it
       shell:
         cmd: |
-          if [ ! -f /var/lib/vz/template/iso/alpine-{{ alpine_image_version }}.iso ]; then
-            wget https://dl-cdn.alpinelinux.org/alpine/v{{ alpine_image_version.split('.')[0] }}/releases/x86_64/alpine-standard-{{ alpine_image_version }}-x86_64.iso -O /var/lib/vz/template/iso/alpine-standard-{{ alpine_image_version }}-x86_64.iso
-            mv /var/lib/vz/template/iso/alpine-standard-{{ alpine_image_version }}-x86_64.iso /var/lib/vz/template/iso/alpine-{{ alpine_image_version }}.iso
+          if [ ! -f /var/lib/vz/template/iso/{{ alpine_iso_name }} ]; then
+            wget {{ alpine_iso_url }} -O /var/lib/vz/template/iso/{{ alpine_iso_name }}
           fi
 
     - name: Create a new VM on Proxmox
@@ -51,7 +53,7 @@
             --memory {{ vm_memory }} \
             --cores {{ vm_cores }} \
             --net0 virtio,bridge=vmbr0 \
-            --ide2 {{ vm_storage }}:iso/alpine-{{ alpine_image_version }}.iso,media=cdrom \
+            --ide2 {{ vm_storage }}:iso/{{ alpine_iso_name }},media=cdrom \
             --scsihw virtio-scsi-pci \
             --scsi0 {{ vm_storage }}:{{ vm_disk_size }}
 
