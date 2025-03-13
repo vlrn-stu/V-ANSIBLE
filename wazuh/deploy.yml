@@ -63,7 +63,7 @@
             --memory {{ vm_memory }} \
             --cores {{ vm_cores }} \
             --net0 virtio,bridge=vmbr0 \
-            --ide2 {{ vm_storage }}:iso/{{ alpine_iso_name }},media=cdrom \
+            --ide2 local:iso/{{ alpine_iso_name }},media=cdrom \
             --scsihw virtio-scsi-pci \
             --scsi0 {{ vm_storage }}:{{ vm_disk_size }}
 
