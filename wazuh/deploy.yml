@@ -1,3 +1,7 @@
+---
+# wazuh-proxmox-deployment.yml
+# Ansible playbook to deploy Wazuh on Proxmox using Alpine Linux and Docker Compose
+
 - name: Deploy Wazuh on Proxmox using Alpine Linux and Docker Compose
   hosts: localhost
   gather_facts: false
@@ -23,96 +27,296 @@
     - name: "alpine_iso_url"
       prompt: "Enter the Alpine Linux ISO URL to use"
       default: "https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-standard-3.18.0-x86_64.iso"
-
+    - name: "vm_ip"
+      prompt: "Enter the IP address for the VM"
+      private: no
+    - name: "vm_root_password"
+      prompt: "Enter the root password for the VM"
+      private: yes
+  
   vars:
     alpine_iso_name: "alpine-3.18.iso"
-
+    
   tasks:
     - name: Gather information about existing VMs
-      shell:
-        cmd: qm list --full
+      shell: qm list --full
       register: vm_list_output
-
+      changed_when: false
+    
     - name: Display existing VMs
       debug:
         msg: "{{ vm_list_output.stdout_lines }}"
-
-    - name: Download Alpine Linux ISO if not already present and rename it
-      shell:
-        cmd: |
-          if [ ! -f /var/lib/vz/template/iso/{{ alpine_iso_name }} ]; then
-            wget {{ alpine_iso_url }} -O /var/lib/vz/template/iso/{{ alpine_iso_name }}
-          fi
-
+    
+    - name: Check if Alpine Linux ISO already exists
+      stat:
+        path: "/var/lib/vz/template/iso/{{ alpine_iso_name }}"
+      register: iso_file
+    
+    - name: Download Alpine Linux ISO if not already present
+      get_url:
+        url: "{{ alpine_iso_url }}"
+        dest: "/var/lib/vz/template/iso/{{ alpine_iso_name }}"
+        mode: '0644'
+      when: not iso_file.stat.exists
+    
     - name: Verify ISO file exists in Proxmox storage
-      shell:
-        cmd: ls /var/lib/vz/template/iso/{{ alpine_iso_name }}
+      stat:
+        path: "/var/lib/vz/template/iso/{{ alpine_iso_name }}"
       register: iso_check
-
-    - name: Fail if ISO file does not exist
-      fail:
-        msg: "ISO file {{ alpine_iso_name }} not found in /var/lib/vz/template/iso/. Ensure it is downloaded correctly."
-      when: iso_check.rc != 0
-
+      failed_when: not iso_check.stat.exists
+    
+    - name: Check if VM with specified ID already exists
+      shell: qm status {{ vm_id }} || echo "NotFound"
+      register: vm_exists
+      changed_when: false
+      failed_when: false
+    
     - name: Create a new VM on Proxmox
-      shell:
-        cmd: |
-          qm create {{ vm_id }} \
-            --name {{ vm_name }} \
-            --memory {{ vm_memory }} \
-            --cores {{ vm_cores }} \
-            --net0 virtio,bridge=vmbr0 \
-            --ide2 local:iso/{{ alpine_iso_name }},media=cdrom \
-            --scsihw virtio-scsi-pci \
-            --scsi0 {{ vm_storage }},size={{ vm_disk_size }}
-
-    - name: Set boot disk and enable boot for the VM
-      shell:
-        cmd: |
-          qm set {{ vm_id }} --boot c --bootdisk scsi0
-
+      shell: |
+        qm create {{ vm_id }} \
+          --name {{ vm_name }} \
+          --memory {{ vm_memory }} \
+          --cores {{ vm_cores }} \
+          --net0 virtio,bridge=vmbr0 \
+          --ide2 local:iso/{{ alpine_iso_name }},media=cdrom \
+          --scsihw virtio-scsi-pci \
+          --scsi0 {{ vm_storage }},size={{ vm_disk_size }} \
+          --boot c \
+          --bootdisk scsi0 \
+          --serial0 socket \
+          --vga serial0
+      when: "'NotFound' in vm_exists.stdout"
+    
     - name: Start the VM
-      shell:
-        cmd: qm start {{ vm_id }}
+      shell: qm start {{ vm_id }}
+      when: "'NotFound' in vm_exists.stdout"
+      register: vm_started
+    
+    - name: Wait for VM to complete initial boot (30 seconds)
+      pause:
+        seconds: 30
+      when: vm_started is defined and vm_started.changed
+    
+    # This creates a template for the basic Alpine installation
+    # The next steps require manual installation first time, after which we can use
+    # subsequent automation to configure
+    
+    - name: Provide instructions for Alpine Linux installation
+      debug:
+        msg: |
+          Please complete the Alpine Linux installation manually:
+          
+          1. Log in to the Proxmox console for VM {{ vm_id }}
+          2. Log in with 'root' (no password)
+          3. Run 'setup-alpine' and follow the prompts
+          4. Configure network with IP: {{ vm_ip }}
+          5. Set root password to your secure password
+          6. Complete installation and reboot
+          
+          After completing installation, press Enter to continue with automation.
+      when: vm_started is defined and vm_started.changed
+    
+    - name: Wait for user to complete Alpine installation
+      pause:
+        prompt: "Press Enter after you've completed the Alpine Linux installation"
+      when: vm_started is defined and vm_started.changed
+    
+    - name: Wait for SSH to become available
+      wait_for:
+        host: "{{ vm_ip }}"
+        port: 22
+        delay: 10
+        timeout: 300
+      when: vm_ip is defined
+    
+    - name: Add Alpine VM to inventory
+      add_host:
+        name: "alpine_vm"
+        ansible_host: "{{ vm_ip }}"
+        ansible_user: "root"
+        ansible_password: "{{ vm_root_password }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      when: vm_ip is defined and vm_root_password is defined
 
-    - name: Install Docker and Docker Compose inside Alpine Linux via SSH
-      shell:
-        cmd: |
-          apk update && apk add docker docker-compose && \
-          rc-update add docker default && \
-          service docker start
-
-    - name: Set up automatic updates for Alpine Linux
-      shell:
-        cmd: echo '0 2 * * * apk update && apk upgrade' | crontab -
-
-    - name: Harden the Alpine Linux system
-      shell:
-        cmd: |
-          apk add audit logrotate bash-completion openssh-server && \
-          echo 'install cramfs /bin/true' >> /etc/modprobe.d/disable-filesystems.conf && \
-          echo 'install udf /bin/true' >> /etc/modprobe.d/disable-filesystems.conf && \
-          sysctl -w net.ipv4.ip_forward=0
-
-    - name: Deploy Wazuh using Docker Compose
+- name: Configure Alpine Linux and Deploy Wazuh
+  hosts: alpine_vm
+  gather_facts: false
+  become: true
+  
+  tasks:
+    - name: Update Alpine package repositories
+      raw: apk update
+    
+    - name: Install Python for Ansible
+      raw: apk add python3
+    
+    - name: Install essential packages
+      apk:
+        name:
+          - docker
+          - docker-compose
+          - curl
+          - bash
+          - bash-completion
+          - sudo
+          - logrotate
+          - audit
+          - coreutils
+          - openssh-server
+        update_cache: yes
+    
+    - name: Configure Docker to start on boot
+      command: rc-update add docker default
+    
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+    
+    - name: Create Wazuh directory
+      file:
+        path: /opt/wazuh
+        state: directory
+        mode: '0755'
+    
+    - name: Configure automatic updates
       copy:
-        dest: /root/docker-compose.yml
+        dest: /etc/periodic/daily/system-update
+        content: |
+          #!/bin/sh
+          apk update && apk upgrade -y
+        mode: '0755'
+    
+    - name: Apply system hardening
+      copy:
+        dest: /etc/modprobe.d/disable-filesystems.conf
+        content: |
+          install cramfs /bin/true
+          install udf /bin/true
+          install squashfs /bin/true
+          install freevxfs /bin/true
+    
+    - name: Apply network hardening
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      with_items:
+        - { key: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+        - { key: 'net.ipv4.conf.all.send_redirects', value: '0' }
+        - { key: 'net.ipv4.conf.all.accept_source_route', value: '0' }
+        - { key: 'net.ipv4.conf.all.log_martians', value: '1' }
+        - { key: 'net.ipv4.icmp_echo_ignore_broadcasts', value: '1' }
+    
+    - name: Deploy Wazuh Docker Compose file
+      copy:
+        dest: /opt/wazuh/docker-compose.yml
         content: |
           version: '3'
           services:
             wazuh-manager:
-              image: wazuh/wazuh-manager
+              image: wazuh/wazuh-manager:4.5.1
               container_name: wazuh-manager
+              hostname: wazuh-manager
+              restart: always
               ports:
-                - "1514/udp"
-                - "55000/tcp"
+                - "1514:1514/udp"
+                - "1515:1515"
+                - "55000:55000"
+              volumes:
+                - wazuh_api_configuration:/var/ossec/api/configuration
+                - wazuh_etc:/var/ossec/etc
+                - wazuh_logs:/var/ossec/logs
+                - wazuh_queue:/var/ossec/queue
+                - wazuh_var_multigroups:/var/ossec/var/multigroups
+                - wazuh_integrations:/var/ossec/integrations
+                - wazuh_active_response:/var/ossec/active-response/bin
+                - wazuh_agentless:/var/ossec/agentless
+                - wazuh_wodles:/var/ossec/wodles
+                - filebeat_etc:/etc/filebeat
+                - filebeat_var:/var/lib/filebeat
+              environment:
+                - INDEXER_URL=https://wazuh-indexer:9200
+                - INDEXER_USERNAME=admin
+                - INDEXER_PASSWORD=SecretPassword
+                - FILEBEAT_SSL_VERIFICATION=none
+            
+            wazuh-indexer:
+              image: wazuh/wazuh-indexer:4.5.1
+              container_name: wazuh-indexer
+              hostname: wazuh-indexer
+              restart: always
+              ports:
+                - "9200:9200"
+              environment:
+                - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+              ulimits:
+                memlock:
+                  soft: -1
+                  hard: -1
+                nofile:
+                  soft: 65536
+                  hard: 65536
+              volumes:
+                - wazuh-indexer-data:/var/lib/wazuh-indexer
+            
             wazuh-dashboard:
-              image: wazuh/wazuh-dashboard
+              image: wazuh/wazuh-dashboard:4.5.1
               container_name: wazuh-dashboard
+              hostname: wazuh-dashboard
+              restart: always
               ports:
-                - "443/tcp"
-
+                - "443:5601"
+              environment:
+                - INDEXER_USERNAME=admin
+                - INDEXER_PASSWORD=SecretPassword
+                - WAZUH_API_URL=https://wazuh-manager
+                - API_USERNAME=wazuh-wui
+                - API_PASSWORD=wazuh-wui
+              depends_on:
+                - wazuh-indexer
+                - wazuh-manager
+          
+          volumes:
+            wazuh_api_configuration:
+            wazuh_etc:
+            wazuh_logs:
+            wazuh_queue:
+            wazuh_var_multigroups:
+            wazuh_integrations:
+            wazuh_active_response:
+            wazuh_agentless:
+            wazuh_wodles:
+            filebeat_etc:
+            filebeat_var:
+            wazuh-indexer-data:
+    
+    - name: Create custom Wazuh configuration
+      copy:
+        dest: /opt/wazuh/local_rules.xml
+        content: |
+          <!-- Local rules for Wazuh -->
+          <group name="local,">
+            <rule id="100001" level="5">
+              <if_sid>5710</if_sid>
+              <description>Attempt to login using a non-existent user</description>
+            </rule>
+          </group>
+    
     - name: Start Wazuh using Docker Compose
-      shell:
-        cmd:
-          docker-compose -f /root/docker-compose.yml up -d
+      command: docker-compose up -d
+      args:
+        chdir: /opt/wazuh
+    
+    - name: Show Wazuh deployment info
+      debug:
+        msg: |
+          Wazuh has been successfully deployed:
+          
+          - Wazuh Dashboard: https://{{ ansible_host }}
+            - Default credentials: admin/SecretPassword
+          
+          - Wazuh Manager: {{ ansible_host }}:55000
+          
+          Please change the default passwords for production use.
