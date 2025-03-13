@@ -21,8 +21,8 @@
     - name: "vm_storage"
       prompt: "Enter the storage location for the VM"
       default: "local-lvm"
-    - name: "alpine_image"
-      prompt: "Enter the Alpine Linux image to use"
+    - name: "alpine_image_version"
+      prompt: "Enter the Alpine Linux version to use (e.g., 3.18.0)"
       default: "3.18.0"
 
   tasks:
@@ -35,11 +35,12 @@
       debug:
         msg: "{{ vm_list_output.stdout_lines }}"
 
-    - name: Download Alpine Linux ISO if not already present
+    - name: Download Alpine Linux ISO if not already present and rename it
       shell:
         cmd: |
-          if [ ! -f /var/lib/vz/template/iso/alpine-standard-{{ alpine_image }}-x86_64.iso ]; then
-            wget https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-standard-{{ alpine_image }}-x86_64.iso -O /var/lib/vz/template/iso/alpine-standard-{{ alpine_image }}-x86_64.iso
+          if [ ! -f /var/lib/vz/template/iso/alpine-{{ alpine_image_version }}.iso ]; then
+            wget https://dl-cdn.alpinelinux.org/alpine/v{{ alpine_image_version.split('.')[0] }}/releases/x86_64/alpine-standard-{{ alpine_image_version }}-x86_64.iso -O /var/lib/vz/template/iso/alpine-standard-{{ alpine_image_version }}-x86_64.iso
+            mv /var/lib/vz/template/iso/alpine-standard-{{ alpine_image_version }}-x86_64.iso /var/lib/vz/template/iso/alpine-{{ alpine_image_version }}.iso
           fi
 
     - name: Create a new VM on Proxmox
@@ -50,7 +51,7 @@
             --memory {{ vm_memory }} \
             --cores {{ vm_cores }} \
             --net0 virtio,bridge=vmbr0 \
-            --ide2 {{ vm_storage }}:iso/{{ alpine_image }}.iso,media=cdrom \
+            --ide2 {{ vm_storage }}:iso/alpine-{{ alpine_image_version }}.iso,media=cdrom \
             --scsihw virtio-scsi-pci \
             --scsi0 {{ vm_storage }}:{{ vm_disk_size }}
 
