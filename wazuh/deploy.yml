@@ -34,7 +34,7 @@
     - name: "vm_password"
       prompt: "Enter the root password for the VM"
       private: yes
-      default: "wazuh2024"
+      default: "wazuh1234"
       
   vars:
     ubuntu_image_url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
@@ -165,7 +165,10 @@
     - name: Create Docker Compose file
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cat > /opt/wazuh/docker-compose.yml << 'EOF'
-        version: '3'
+        networks:
+          wazuh-network:
+            driver: bridge
+
         services:
           wazuh-manager:
             image: wazuh/wazuh-manager:4.5.1
@@ -176,6 +179,8 @@
               - '1514:1514/udp'
               - '1515:1515'
               - '55000:55000'
+            networks:
+              - wazuh-network
             volumes:
               - wazuh_api_configuration:/var/ossec/api/configuration
               - wazuh_etc:/var/ossec/etc
@@ -188,7 +193,7 @@
               - wazuh_wodles:/var/ossec/wodles
               - filebeat_etc:/etc/filebeat
               - filebeat_var:/var/lib/filebeat
-          
+            
           wazuh-indexer:
             image: wazuh/wazuh-indexer:4.5.1
             container_name: wazuh-indexer
@@ -196,6 +201,8 @@
             restart: always
             ports:
               - '9200:9200'
+            networks:
+              - wazuh-network
             environment:
               - 'OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m'
             ulimits:
@@ -207,7 +214,7 @@
                 hard: 65536
             volumes:
               - wazuh-indexer-data:/var/lib/wazuh-indexer
-          
+            
           wazuh-dashboard:
             image: wazuh/wazuh-dashboard:4.5.1
             container_name: wazuh-dashboard
@@ -215,7 +222,10 @@
             restart: always
             ports:
               - '443:5601'
+            networks:
+              - wazuh-network
             environment:
+              - INDEXER_URL=https://wazuh-indexer:9200
               - INDEXER_USERNAME=admin
               - INDEXER_PASSWORD=SecretPassword
               - WAZUH_API_URL=https://wazuh-manager
@@ -224,7 +234,7 @@
             depends_on:
               - wazuh-indexer
               - wazuh-manager
-        
+
         volumes:
           wazuh_api_configuration:
           wazuh_etc:
