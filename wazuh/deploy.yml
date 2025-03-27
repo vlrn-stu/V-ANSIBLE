@@ -39,7 +39,7 @@
   vars:
     ubuntu_image_url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
     ubuntu_image_name: "ubuntu-22.04.img"
-    wazuh_version: "4.11.2"
+    wazuh_version: "v4.11.1"
     
   tasks:
     - name: Install necessary packages on Proxmox host
@@ -169,7 +169,7 @@
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "echo 'vm.max_map_count=262144' >> /etc/sysctl.conf"
       ignore_errors: no
 
-    - name: Clone Wazuh Docker repository with version 4.12.0
+    - name: Clone Wazuh Docker repository version 4.11.1
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "git clone -b {{ wazuh_version }} https://github.com/wazuh/wazuh-docker.git /opt/wazuh-docker"
       ignore_errors: no
