@@ -39,7 +39,7 @@
   vars:
     ubuntu_image_url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
     ubuntu_image_name: "ubuntu-22.04.img"
-    wazuh_version: "v4.12.0"
+    wazuh_version: "4.12.0"
     
   tasks:
     - name: Install necessary packages on Proxmox host
