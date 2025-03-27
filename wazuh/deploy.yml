@@ -148,109 +148,47 @@
         exit 1
       ignore_errors: yes
     
-    - name: Install Docker with curl method (more reliable)
+    - name: Install Docker with curl method
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "apt-get update && apt-get install -y curl && curl -fsSL https://get.docker.com | sh"
       ignore_errors: no
       
-    - name: Install Docker Compose
+    - name: Install Docker Compose and Git
       shell: |
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "apt-get install -y docker-compose-plugin"
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "apt-get install -y docker-compose-plugin git"
       ignore_errors: no
       
-    - name: Create Wazuh directory
+    - name: Increase max_map_count
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sysctl -w vm.max_map_count=262144"
+      ignore_errors: no
+      
+    - name: Make max_map_count setting permanent
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "echo 'vm.max_map_count=262144' >> /etc/sysctl.conf"
+      ignore_errors: no
+
+    - name: Clone Wazuh Docker repository
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "git clone https://github.com/wazuh/wazuh-docker.git /opt/wazuh-docker"
+      ignore_errors: no
+
+    - name: Create Wazuh deployment directory
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "mkdir -p /opt/wazuh"
+      ignore_errors: no
 
-    - name: Create Docker Compose file
+    - name: Copy single-node deployment files to Wazuh directory
       shell: |
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cat > /opt/wazuh/docker-compose.yml << 'EOF'
-        networks:
-          wazuh-network:
-            driver: bridge
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cp -r /opt/wazuh-docker/single-node/* /opt/wazuh/"
+      ignore_errors: no
 
-        services:
-          wazuh-manager:
-            image: wazuh/wazuh-manager:4.5.1
-            container_name: wazuh-manager
-            hostname: wazuh-manager
-            restart: always
-            ports:
-              - '1514:1514/udp'
-              - '1515:1515'
-              - '55000:55000'
-            networks:
-              - wazuh-network
-            volumes:
-              - wazuh_api_configuration:/var/ossec/api/configuration
-              - wazuh_etc:/var/ossec/etc
-              - wazuh_logs:/var/ossec/logs
-              - wazuh_queue:/var/ossec/queue
-              - wazuh_var_multigroups:/var/ossec/var/multigroups
-              - wazuh_integrations:/var/ossec/integrations
-              - wazuh_active_response:/var/ossec/active-response/bin
-              - wazuh_agentless:/var/ossec/agentless
-              - wazuh_wodles:/var/ossec/wodles
-              - filebeat_etc:/etc/filebeat
-              - filebeat_var:/var/lib/filebeat
-            
-          wazuh-indexer:
-            image: wazuh/wazuh-indexer:4.5.1
-            container_name: wazuh-indexer
-            hostname: wazuh-indexer
-            restart: always
-            ports:
-              - '9200:9200'
-            networks:
-              - wazuh-network
-            environment:
-              - 'OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m'
-            ulimits:
-              memlock:
-                soft: -1
-                hard: -1
-              nofile:
-                soft: 65536
-                hard: 65536
-            volumes:
-              - wazuh-indexer-data:/var/lib/wazuh-indexer
-            
-          wazuh-dashboard:
-            image: wazuh/wazuh-dashboard:4.5.1
-            container_name: wazuh-dashboard
-            hostname: wazuh-dashboard
-            restart: always
-            ports:
-              - '443:5601'
-            networks:
-              - wazuh-network
-            environment:
-              - INDEXER_URL=https://wazuh-indexer:9200
-              - INDEXER_USERNAME=admin
-              - INDEXER_PASSWORD=SecretPassword
-              - WAZUH_API_URL=https://wazuh-manager
-              - API_USERNAME=wazuh-wui
-              - API_PASSWORD=wazuh-wui
-            depends_on:
-              - wazuh-indexer
-              - wazuh-manager
+    - name: Generate SSL certificates
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker compose -f generate-certs.yml run --rm generator"
+      ignore_errors: no
 
-        volumes:
-          wazuh_api_configuration:
-          wazuh_etc:
-          wazuh_logs:
-          wazuh_queue:
-          wazuh_var_multigroups:
-          wazuh_integrations:
-          wazuh_active_response:
-          wazuh_agentless:
-          wazuh_wodles:
-          filebeat_etc:
-          filebeat_var:
-          wazuh-indexer-data:
-        EOF"
-
-    - name: Deploy Wazuh using Docker Compose
+    - name: Start Wazuh with Docker Compose
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker compose up -d"
       ignore_errors: no
@@ -264,3 +202,6 @@
           Default credentials: admin/SecretPassword
           
           Wazuh Manager: {{ vm_ip }}:55000
+          
+          The environment takes about 1 minute to fully initialize.
+          You can check the status with: ssh root@{{ vm_ip }} "cd /opt/wazuh && docker compose ps"
