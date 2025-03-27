@@ -39,7 +39,7 @@
   vars:
     ubuntu_image_url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
     ubuntu_image_name: "ubuntu-22.04.img"
-    wazuh_version: "4.12.0"
+    wazuh_version: "4.11.2"
     
   tasks:
     - name: Install necessary packages on Proxmox host
@@ -186,7 +186,7 @@
 
     - name: Generate SSL certificates
       shell: |
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker compose -f generate-certs.yml run --rm generator"
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker compose -f generate-indexer-certs.yml run --rm generator"
       ignore_errors: no
 
     - name: Start Wazuh with Docker Compose
