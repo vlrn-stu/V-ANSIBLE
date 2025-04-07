@@ -12,7 +12,7 @@
       default: 100
     - name: "vm_cores"
       prompt: "Enter the number of CPU cores for the VM"
-      default: 2
+      default: 3
     - name: "vm_memory"
       prompt: "Enter the memory size (in MB) for the VM"
       default: 4096
@@ -24,13 +24,13 @@
       default: "local-lvm"
     - name: "vm_ip"
       prompt: "Enter the IP address for the VM"
-      default: "192.168.137.70"
+      default: "192.168.0.70"
     - name: "vm_netmask"
       prompt: "Enter the netmask for the VM"
       default: "24"
     - name: "vm_gateway"
       prompt: "Enter the gateway for the VM"
-      default: "192.168.137.1"
+      default: "192.168.0.1"
     - name: "vm_password"
       prompt: "Enter the root password for the VM"
       private: yes
@@ -71,6 +71,7 @@
           --name {{ vm_name }} \
           --memory {{ vm_memory }} \
           --cores {{ vm_cores }} \
+          --cpu x86-64-v2 \
           --net0 virtio,bridge=vmbr0
       register: vm_created
         
