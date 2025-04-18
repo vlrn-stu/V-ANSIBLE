@@ -12,13 +12,13 @@
       default: 100
     - name: "vm_cores"
       prompt: "Enter the number of CPU cores for the VM"
-      default: 3
+      default: 4
     - name: "vm_memory"
       prompt: "Enter the memory size (in MB) for the VM"
-      default: 4096
+      default: 8192
     - name: "vm_disk_size"
-      prompt: "Enter the disk size for the VM (e.g., 20G)"
-      default: "20G"
+      prompt: "Enter the disk size for the VM (e.g., 150G)"
+      default: "150G"
     - name: "vm_storage"
       prompt: "Enter the storage location for the VM (e.g., local-lvm)"
       default: "local-lvm"
@@ -35,13 +35,42 @@
       prompt: "Enter the root password for the VM"
       private: yes
       default: "wazuh1234"
+    - name: "wazuh_username"
+      prompt: "Enter the Wazuh admin username"
+      default: "admin"
+    - name: "wazuh_password"
+      prompt: "Enter the Wazuh admin password"
+      private: yes
+      default: "SecretPassword"
+
       
   vars:
     ubuntu_image_url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
     ubuntu_image_name: "ubuntu-22.04.img"
     wazuh_version: "v4.11.1"
+    local_configs_path: "{{ playbook_dir }}/configs"
     
   tasks:
+    - name: Display input configuration values
+      debug:
+        msg: |
+          ===================== VM Configuration =====================
+          VM Name: {{ vm_name }}
+          VM ID: {{ vm_id }}
+          CPU Cores: {{ vm_cores }}
+          Memory: {{ vm_memory }} MB
+          Disk Size: {{ vm_disk_size }}
+          Storage Location: {{ vm_storage }}
+          IP Address: {{ vm_ip }}
+          Netmask: {{ vm_netmask }}
+          Gateway: {{ vm_gateway }}
+          
+          =================== Wazuh Configuration ===================
+          Wazuh Version: {{ wazuh_version }}
+          Wazuh Admin Username: {{ wazuh_username }}
+          Local Configs Path: {{ local_configs_path }}
+          ============================================================
+    
     - name: Install necessary packages on Proxmox host
       shell: |
         apt-get update && apt-get install -y sshpass wget
@@ -185,6 +214,41 @@
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cp -r /opt/wazuh-docker/single-node/* /opt/wazuh/"
       ignore_errors: no
 
+    - name: Check if local configs directory exists
+      stat:
+        path: "{{ local_configs_path }}"
+      register: config_dir
+      delegate_to: localhost
+
+    - name: Check if local configs directory contains files
+      find:
+        paths: "{{ local_configs_path }}"
+        file_type: any
+      register: config_files
+      delegate_to: localhost
+      when: config_dir.stat.exists and config_dir.stat.isdir
+
+    - name: Copy local configuration files to VM
+      shell: |
+        echo "Copying local configuration files from {{ local_configs_path }} to VM..."
+        sshpass -p "{{ vm_password }}" scp -r -o StrictHostKeyChecking=no "{{ local_configs_path }}"/* root@{{ vm_ip }}:/opt/wazuh/
+        echo "Local configuration files copied successfully."
+      register: copy_configs_result
+      when: config_dir.stat.exists and config_dir.stat.isdir and config_files.matched > 0
+      
+    - name: Display local config files copy result
+      debug:
+        msg: "{{ copy_configs_result.stdout_lines | default('No config files found to copy', true) }}"
+      when: config_dir.stat.exists and config_dir.stat.isdir
+
+    - name: Update Wazuh credentials in docker-compose.yml
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sed -i 's/INDEXER_USERNAME=admin/INDEXER_USERNAME={{ wazuh_username }}/g' /opt/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml"
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sed -i 's/INDEXER_PASSWORD=SecretPassword/INDEXER_PASSWORD={{ wazuh_password }}/g' /opt/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml"
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sed -i 's/DASHBOARD_USERNAME=admin/DASHBOARD_USERNAME={{ wazuh_username }}/g' /opt/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml"
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sed -i 's/DASHBOARD_PASSWORD=SecretPassword/DASHBOARD_PASSWORD={{ wazuh_password }}/g' /opt/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml"
+      ignore_errors: yes
+
     - name: Generate SSL certificates
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker compose -f generate-indexer-certs.yml run --rm generator"
@@ -198,12 +262,23 @@
     - name: Display Wazuh deployment information
       debug:
         msg: |
-          Wazuh has been successfully deployed:
+          ============= Wazuh Deployment Information =============
           
           Wazuh Dashboard: https://{{ vm_ip }}
-          Default credentials: admin/SecretPassword
+          Username: {{ wazuh_username }}
+          Password: {{ wazuh_password }}
           
           Wazuh Manager: {{ vm_ip }}:55000
           
-          The environment takes about 1 minute to fully initialize.
+          VM Information:
+          - Name: {{ vm_name }}
+          - ID: {{ vm_id }}
+          - IP Address: {{ vm_ip }}
+          - CPU Cores: {{ vm_cores }}
+          - Memory: {{ vm_memory }} MB
+          - Disk Size: {{ vm_disk_size }}
+          
+          Note: The environment takes about 1 minute to fully initialize.
           You can check the status with: ssh root@{{ vm_ip }} "cd /opt/wazuh && docker compose ps"
+          
+          ========================================================
