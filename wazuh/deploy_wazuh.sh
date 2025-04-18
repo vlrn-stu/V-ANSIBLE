@@ -382,25 +382,30 @@ generate_ansible_playbook() {
       when: config_examination.stdout is defined
 
     - name: Create custom .env file with credentials
+      copy:
+        dest: "/tmp/wazuh.env"
+        content: |
+          # Wazuh indexer variables
+          INDEXER_USERNAME={{ wazuh_username }}
+          INDEXER_PASSWORD={{ wazuh_password }}
+          ADMIN_USERNAME={{ wazuh_username }}
+          ADMIN_PASSWORD={{ wazuh_password }}
+          # Dashboard variables
+          DASHBOARD_USERNAME={{ wazuh_username }}
+          DASHBOARD_PASSWORD={{ wazuh_password }}
+          # API variables
+          API_USERNAME={{ wazuh_username }}
+          API_PASSWORD={{ wazuh_password }}
+          # Other variables 
+          WAZUH_API_USERNAME={{ wazuh_username }}
+          WAZUH_API_PASSWORD={{ wazuh_password }}
+          ELASTIC_USERNAME={{ wazuh_username }}
+          ELASTIC_PASSWORD={{ wazuh_password }}
+      delegate_to: localhost
+
+    - name: Copy .env file to VM
       shell: |
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && cat > .env << EOF
-# Wazuh indexer variables
-INDEXER_USERNAME={{ wazuh_username }}
-INDEXER_PASSWORD={{ wazuh_password }}
-ADMIN_USERNAME={{ wazuh_username }}
-ADMIN_PASSWORD={{ wazuh_password }}
-# Dashboard variables
-DASHBOARD_USERNAME={{ wazuh_username }}
-DASHBOARD_PASSWORD={{ wazuh_password }}
-# API variables
-API_USERNAME={{ wazuh_username }}
-API_PASSWORD={{ wazuh_password }}
-# Other variables 
-WAZUH_API_USERNAME={{ wazuh_username }}
-WAZUH_API_PASSWORD={{ wazuh_password }}
-ELASTIC_USERNAME={{ wazuh_username }}
-ELASTIC_PASSWORD={{ wazuh_password }}
-EOF"
+        sshpass -p "{{ vm_password }}" scp -o StrictHostKeyChecking=no /tmp/wazuh.env root@{{ vm_ip }}:/opt/wazuh/.env
       ignore_errors: no
 
     - name: Modify docker-compose.yml to use environment variables from .env file
