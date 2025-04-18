@@ -1,36 +1,30 @@
 #!/bin/bash
 # Complete automated Wazuh deployment on Proxmox
 
-# ANSI color codes for better readability
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Function to print section headers
 print_header() {
     echo -e "\n${BLUE}================================================================================${NC}"
     echo -e "${BLUE}    $1${NC}"
     echo -e "${BLUE}================================================================================${NC}\n"
 }
 
-# Function to print success messages
 print_success() {
     echo -e "${GREEN}[SUCCESS] $1${NC}"
 }
 
-# Function to print information messages
 print_info() {
     echo -e "${YELLOW}[INFO] $1${NC}"
 }
 
-# Function to print error messages
 print_error() {
     echo -e "${RED}[ERROR] $1${NC}"
 }
 
-# Function to read input with default value
 read_input() {
     local prompt="$1"
     local default="$2"
@@ -51,7 +45,6 @@ read_input() {
         input="$default"
     fi
     
-    # Store the value and echo it back for confirmation
     eval "$var_name=\"$input\""
     
     if [ "$is_password" = true ]; then
@@ -397,6 +390,7 @@ generate_ansible_playbook() {
       find:
         paths: "{{ local_configs_path }}"
         file_type: any
+        excludes: ".gitkeep"
       register: config_files
       delegate_to: localhost
       when: config_dir.stat.exists and config_dir.stat.isdir
@@ -487,11 +481,12 @@ collect_configuration() {
     
     # Check for local configuration files
     if [ -d "./configs" ]; then
-        file_count=$(find ./configs -type f | wc -l)
+        # Count files excluding .gitkeep
+        file_count=$(find ./configs -type f -not -name ".gitkeep" | wc -l)
         if [ "$file_count" -gt 0 ]; then
             print_info "Found $file_count files in the local 'configs' directory. These will be copied to the Wazuh VM."
         else
-            print_info "The 'configs' directory exists but contains no files."
+            print_info "The 'configs' directory exists but contains no configuration files."
         fi
     else
         print_info "No local 'configs' directory found. Create a 'configs' directory in the same location as this script to include custom configuration files."
@@ -519,7 +514,7 @@ display_summary() {
     echo -e "  Password:       ${YELLOW}********${NC}"
     
     if [ -d "./configs" ]; then
-        file_count=$(find ./configs -type f | wc -l)
+        file_count=$(find ./configs -type f -not -name ".gitkeep" | wc -l)
         echo -e "\n${BLUE}Local Configurations:${NC}"
         echo -e "  Files to copy:   ${YELLOW}$file_count${NC}"
     fi
