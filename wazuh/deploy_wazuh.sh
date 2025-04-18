@@ -61,6 +61,161 @@ read_input() {
     fi
 }
 
+# Function to fetch available Wazuh versions
+fetch_wazuh_versions() {
+    print_header "FETCHING AVAILABLE WAZUH VERSIONS"
+    
+    print_info "Fetching available versions from GitHub (this may take a moment)..."
+    
+    # Check if curl is installed
+    if ! command -v curl &> /dev/null; then
+        print_error "curl is not installed. Please install curl first."
+        print_info "Defaulting to recent stable versions..."
+        WAZUH_VERSIONS=("v4.7.0" "v4.8.0" "v4.9.0" "v4.10.0" "v4.11.0" "v4.11.1" "v4.11.2" "v4.11.3" "v4.12.0" "v4.13.0")
+        return
+    fi
+    
+    # Check if jq is installed
+    if ! command -v jq &> /dev/null; then
+        print_info "jq is not installed. Using simple version fetching."
+        # Fetch tags from GitHub API
+        tag_list=$(curl -s https://api.github.com/repos/wazuh/wazuh-docker/tags?per_page=100 | grep -o '"name": "[^"]*"' | cut -d'"' -f4)
+        
+        # Filter tags starting with v and create an array
+        WAZUH_VERSIONS=()
+        while IFS= read -r tag; do
+            if [[ $tag == v* ]]; then
+                WAZUH_VERSIONS+=("$tag")
+            fi
+        done <<< "$tag_list"
+        
+        # If no versions were found, use default stable versions
+        if [ ${#WAZUH_VERSIONS[@]} -eq 0 ]; then
+            print_info "No versions found. Defaulting to recent stable versions..."
+            WAZUH_VERSIONS=("v4.7.0" "v4.8.0" "v4.9.0" "v4.10.0" "v4.11.0" "v4.11.1" "v4.11.2" "v4.11.3" "v4.12.0" "v4.13.0")
+        fi
+    else
+        # Fetch tags from GitHub API using jq for better parsing
+        WAZUH_VERSIONS=($(curl -s https://api.github.com/repos/wazuh/wazuh-docker/tags?per_page=100 | jq -r '.[].name' | grep "^v"))
+        
+        # If no versions were found, use default stable versions
+        if [ ${#WAZUH_VERSIONS[@]} -eq 0 ]; then
+            print_info "No versions found. Defaulting to recent stable versions..."
+            WAZUH_VERSIONS=("v4.7.0" "v4.8.0" "v4.9.0" "v4.10.0" "v4.11.0" "v4.11.1" "v4.11.2" "v4.11.3" "v4.12.0" "v4.13.0")
+        fi
+    fi
+    
+    print_success "Found ${#WAZUH_VERSIONS[@]} Wazuh versions."
+}
+
+# Function to select Wazuh version
+select_wazuh_version() {
+    print_header "SELECT WAZUH VERSION"
+    
+    # Fetch available versions
+    fetch_wazuh_versions
+    
+    # Check if any versions were found
+    if [ ${#WAZUH_VERSIONS[@]} -eq 0 ]; then
+        print_error "No Wazuh versions found. Using default version v4.11.1."
+        wazuh_version="v4.11.1"
+        return
+    fi
+    
+    # Display available versions (most recent first)
+    echo -e "${BLUE}Available Wazuh versions:${NC}"
+    
+    # Sort versions in reverse order (newest first)
+    sorted_versions=($(printf '%s\n' "${WAZUH_VERSIONS[@]}" | sort -rV))
+    
+    # Display the top 15 newest versions with numbers
+    total_versions=${#sorted_versions[@]}
+    versions_to_show=$((total_versions > 15 ? 15 : total_versions))
+    
+    for ((i=0; i<versions_to_show; i++)); do
+        echo -e "  ${GREEN}$((i+1)).${NC} ${sorted_versions[$i]}"
+    done
+    
+    # Allow user to see all versions if there are more than 15
+    if [ $total_versions -gt 15 ]; then
+        echo -e "\n${YELLOW}Showing newest 15 versions out of $total_versions available versions.${NC}"
+        echo -ne "${YELLOW}Do you want to see all versions? (y/n) [n]: ${NC}"
+        read show_all
+        
+        if [[ "$show_all" == "y" || "$show_all" == "Y" ]]; then
+            echo -e "\n${BLUE}All available Wazuh versions:${NC}"
+            for ((i=0; i<total_versions; i++)); do
+                # Display in 3 columns
+                if [ $((i % 3)) -eq 0 ]; then
+                    echo -ne "  "
+                fi
+                echo -ne "${GREEN}$((i+1)).${NC} ${sorted_versions[$i]}    "
+                if [ $((i % 3)) -eq 2 ]; then
+                    echo ""
+                fi
+            done
+            # Add a newline if the last row wasn't complete
+            if [ $(((total_versions-1) % 3)) -ne 2 ]; then
+                echo ""
+            fi
+        fi
+    fi
+    
+    # Ask for version selection
+    echo -ne "\n${YELLOW}Enter the number of the version to use or type a specific version [1]: ${NC}"
+    read version_selection
+    
+    # Use first version if input is empty
+    if [ -z "$version_selection" ]; then
+        version_selection=1
+    fi
+    
+    # Check if input is a number
+    if [[ "$version_selection" =~ ^[0-9]+$ ]]; then
+        # Adjust for 0-based indexing
+        index=$((version_selection - 1))
+        
+        # Check if number is valid
+        if [ $index -ge 0 ] && [ $index -lt $total_versions ]; then
+            wazuh_version="${sorted_versions[$index]}"
+        else
+            print_error "Invalid selection. Using newest version ${sorted_versions[0]}."
+            wazuh_version="${sorted_versions[0]}"
+        fi
+    else
+        # Input is not a number, interpret as a specific version
+        if [[ "$version_selection" == v* ]]; then
+            # Version already starts with v
+            wazuh_version="$version_selection"
+        else
+            # Add v prefix if needed
+            wazuh_version="v$version_selection"
+        fi
+        
+        # Validate that this version exists (give warning but allow custom versions)
+        version_exists=false
+        for v in "${WAZUH_VERSIONS[@]}"; do
+            if [ "$v" == "$wazuh_version" ]; then
+                version_exists=true
+                break
+            fi
+        done
+        
+        if [ "$version_exists" = false ]; then
+            print_info "Warning: Version $wazuh_version was not found in the list of known versions."
+            echo -ne "${YELLOW}Continue with this version anyway? (y/n) [n]: ${NC}"
+            read continue_anyway
+            
+            if [[ "$continue_anyway" != "y" && "$continue_anyway" != "Y" ]]; then
+                print_info "Using default version v4.11.1 instead."
+                wazuh_version="v4.11.1"
+            fi
+        fi
+    fi
+    
+    print_success "Selected Wazuh version: $wazuh_version"
+}
+
 # Generate an Ansible playbook file
 generate_ansible_playbook() {
     print_header "GENERATING ANSIBLE PLAYBOOK"
@@ -83,9 +238,9 @@ generate_ansible_playbook() {
     vm_password: "${vm_password}"
     wazuh_username: "${wazuh_username}"
     wazuh_password: "${wazuh_password}"
+    wazuh_version: "${wazuh_version}"
     ubuntu_image_url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
     ubuntu_image_name: "ubuntu-22.04.img"
-    wazuh_version: "v4.11.1"
     local_configs_path: "${PWD}/configs"
     
   tasks:
@@ -217,7 +372,7 @@ generate_ansible_playbook() {
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "echo 'vm.max_map_count=262144' >> /etc/sysctl.conf"
       ignore_errors: no
 
-    - name: Clone Wazuh Docker repository version 4.11.1
+    - name: Clone Wazuh Docker repository version {{ wazuh_version }}
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "git clone -b {{ wazuh_version }} https://github.com/wazuh/wazuh-docker.git /opt/wazuh-docker"
       ignore_errors: no
@@ -296,6 +451,8 @@ generate_ansible_playbook() {
           - Memory: {{ vm_memory }} MB
           - Disk Size: {{ vm_disk_size }}
           
+          Wazuh Version: {{ wazuh_version }}
+          
           Note: The environment takes about 1 minute to fully initialize.
           You can check the status with: ssh root@{{ vm_ip }} "cd /opt/wazuh && docker compose ps"
           
@@ -321,6 +478,9 @@ collect_configuration() {
     read_input "Enter the root password for the VM" "wazuh1234" "vm_password" true
     
     print_header "WAZUH CONFIGURATION"
+    
+    # Select Wazuh version
+    select_wazuh_version
     
     read_input "Enter the Wazuh admin username" "admin" "wazuh_username"
     read_input "Enter the Wazuh admin password" "SecretPassword" "wazuh_password" true
@@ -354,9 +514,9 @@ display_summary() {
     echo -e "  Gateway:        ${YELLOW}$vm_gateway${NC}"
     
     echo -e "\n${BLUE}Wazuh Configuration:${NC}"
+    echo -e "  Version:        ${YELLOW}$wazuh_version${NC}"
     echo -e "  Username:       ${YELLOW}$wazuh_username${NC}"
     echo -e "  Password:       ${YELLOW}********${NC}"
-    echo -e "  Version:        ${YELLOW}v4.11.1${NC}"
     
     if [ -d "./configs" ]; then
         file_count=$(find ./configs -type f | wc -l)
