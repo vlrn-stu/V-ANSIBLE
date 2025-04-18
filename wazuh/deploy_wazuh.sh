@@ -40,7 +40,6 @@ read_input() {
         read input
     fi
     
-    # Use default value if input is empty
     if [ -z "$input" ]; then
         input="$default"
     fi
@@ -54,74 +53,48 @@ read_input() {
     fi
 }
 
-# Function to fetch available Wazuh versions
 fetch_wazuh_versions() {
     print_header "FETCHING AVAILABLE WAZUH VERSIONS"
     
-    print_info "Fetching available versions from GitHub (this may take a moment)..."
+    print_info "Fetching available versions from GitHub..."
     
-    # Check if curl is installed
     if ! command -v curl &> /dev/null; then
-        print_error "curl is not installed. Please install curl first."
-        print_info "Defaulting to recent stable versions..."
+        print_error "curl is not installed."
         WAZUH_VERSIONS=("v4.7.0" "v4.8.0" "v4.9.0" "v4.10.0" "v4.11.0" "v4.11.1" "v4.11.2" "v4.11.3" "v4.12.0" "v4.13.0")
         return
     fi
     
-    # Check if jq is installed
-    if ! command -v jq &> /dev/null; then
-        print_info "jq is not installed. Using simple version fetching."
-        # Fetch tags from GitHub API
-        tag_list=$(curl -s https://api.github.com/repos/wazuh/wazuh-docker/tags?per_page=100 | grep -o '"name": "[^"]*"' | cut -d'"' -f4)
-        
-        # Filter tags starting with v and create an array
-        WAZUH_VERSIONS=()
-        while IFS= read -r tag; do
-            if [[ $tag == v* ]]; then
-                WAZUH_VERSIONS+=("$tag")
-            fi
-        done <<< "$tag_list"
-        
-        # If no versions were found, use default stable versions
-        if [ ${#WAZUH_VERSIONS[@]} -eq 0 ]; then
-            print_info "No versions found. Defaulting to recent stable versions..."
-            WAZUH_VERSIONS=("v4.7.0" "v4.8.0" "v4.9.0" "v4.10.0" "v4.11.0" "v4.11.1" "v4.11.2" "v4.11.3" "v4.12.0" "v4.13.0")
+    tag_list=$(curl -s https://api.github.com/repos/wazuh/wazuh-docker/tags?per_page=100 | grep -o '"name": "[^"]*"' | cut -d'"' -f4)
+    
+    WAZUH_VERSIONS=()
+    while IFS= read -r tag; do
+        if [[ $tag == v* ]]; then
+            WAZUH_VERSIONS+=("$tag")
         fi
-    else
-        # Fetch tags from GitHub API using jq for better parsing
-        WAZUH_VERSIONS=($(curl -s https://api.github.com/repos/wazuh/wazuh-docker/tags?per_page=100 | jq -r '.[].name' | grep "^v"))
-        
-        # If no versions were found, use default stable versions
-        if [ ${#WAZUH_VERSIONS[@]} -eq 0 ]; then
-            print_info "No versions found. Defaulting to recent stable versions..."
-            WAZUH_VERSIONS=("v4.7.0" "v4.8.0" "v4.9.0" "v4.10.0" "v4.11.0" "v4.11.1" "v4.11.2" "v4.11.3" "v4.12.0" "v4.13.0")
-        fi
+    done <<< "$tag_list"
+    
+    if [ ${#WAZUH_VERSIONS[@]} -eq 0 ]; then
+        WAZUH_VERSIONS=("v4.7.0" "v4.8.0" "v4.9.0" "v4.10.0" "v4.11.0" "v4.11.1" "v4.11.2" "v4.11.3" "v4.12.0" "v4.13.0")
     fi
     
     print_success "Found ${#WAZUH_VERSIONS[@]} Wazuh versions."
 }
 
-# Function to select Wazuh version
 select_wazuh_version() {
     print_header "SELECT WAZUH VERSION"
     
-    # Fetch available versions
     fetch_wazuh_versions
     
-    # Check if any versions were found
     if [ ${#WAZUH_VERSIONS[@]} -eq 0 ]; then
         print_error "No Wazuh versions found. Using default version v4.11.1."
         wazuh_version="v4.11.1"
         return
     fi
     
-    # Display available versions (most recent first)
     echo -e "${BLUE}Available Wazuh versions:${NC}"
     
-    # Sort versions in reverse order (newest first)
     sorted_versions=($(printf '%s\n' "${WAZUH_VERSIONS[@]}" | sort -rV))
     
-    # Display the top 15 newest versions with numbers
     total_versions=${#sorted_versions[@]}
     versions_to_show=$((total_versions > 15 ? 15 : total_versions))
     
@@ -129,7 +102,6 @@ select_wazuh_version() {
         echo -e "  ${GREEN}$((i+1)).${NC} ${sorted_versions[$i]}"
     done
     
-    # Allow user to see all versions if there are more than 15
     if [ $total_versions -gt 15 ]; then
         echo -e "\n${YELLOW}Showing newest 15 versions out of $total_versions available versions.${NC}"
         echo -ne "${YELLOW}Do you want to see all versions? (y/n) [n]: ${NC}"
@@ -138,7 +110,6 @@ select_wazuh_version() {
         if [[ "$show_all" == "y" || "$show_all" == "Y" ]]; then
             echo -e "\n${BLUE}All available Wazuh versions:${NC}"
             for ((i=0; i<total_versions; i++)); do
-                # Display in 3 columns
                 if [ $((i % 3)) -eq 0 ]; then
                     echo -ne "  "
                 fi
@@ -147,28 +118,22 @@ select_wazuh_version() {
                     echo ""
                 fi
             done
-            # Add a newline if the last row wasn't complete
             if [ $(((total_versions-1) % 3)) -ne 2 ]; then
                 echo ""
             fi
         fi
     fi
     
-    # Ask for version selection
     echo -ne "\n${YELLOW}Enter the number of the version to use or type a specific version [1]: ${NC}"
     read version_selection
     
-    # Use first version if input is empty
     if [ -z "$version_selection" ]; then
         version_selection=1
     fi
     
-    # Check if input is a number
     if [[ "$version_selection" =~ ^[0-9]+$ ]]; then
-        # Adjust for 0-based indexing
         index=$((version_selection - 1))
         
-        # Check if number is valid
         if [ $index -ge 0 ] && [ $index -lt $total_versions ]; then
             wazuh_version="${sorted_versions[$index]}"
         else
@@ -176,16 +141,12 @@ select_wazuh_version() {
             wazuh_version="${sorted_versions[0]}"
         fi
     else
-        # Input is not a number, interpret as a specific version
         if [[ "$version_selection" == v* ]]; then
-            # Version already starts with v
             wazuh_version="$version_selection"
         else
-            # Add v prefix if needed
             wazuh_version="v$version_selection"
         fi
         
-        # Validate that this version exists (give warning but allow custom versions)
         version_exists=false
         for v in "${WAZUH_VERSIONS[@]}"; do
             if [ "$v" == "$wazuh_version" ]; then
@@ -209,7 +170,6 @@ select_wazuh_version() {
     print_success "Selected Wazuh version: $wazuh_version"
 }
 
-# Generate an Ansible playbook file
 generate_ansible_playbook() {
     print_header "GENERATING ANSIBLE PLAYBOOK"
     
@@ -408,12 +368,71 @@ generate_ansible_playbook() {
         msg: "{{ copy_configs_result.stdout_lines | default('No config files found to copy', true) }}"
       when: config_dir.stat.exists and config_dir.stat.isdir
 
-    - name: Update Wazuh credentials in configuration files
+    - name: Examine default configuration files
       shell: |
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sed -i 's/INDEXER_USERNAME=admin/INDEXER_USERNAME={{ wazuh_username }}/g' /opt/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml"
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sed -i 's/INDEXER_PASSWORD=SecretPassword/INDEXER_PASSWORD={{ wazuh_password }}/g' /opt/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml"
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sed -i 's/DASHBOARD_USERNAME=admin/DASHBOARD_USERNAME={{ wazuh_username }}/g' /opt/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml"
-        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "sed -i 's/DASHBOARD_PASSWORD=SecretPassword/DASHBOARD_PASSWORD={{ wazuh_password }}/g' /opt/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml"
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "ls -la /opt/wazuh/ && \
+        cat /opt/wazuh/docker-compose.yml | grep -A 20 environment || echo 'No environment section found' && \
+        find /opt/wazuh -name '*.yml' -type f | xargs grep -l 'password' || echo 'No password files found'"
+      register: config_examination
+      ignore_errors: yes
+
+    - name: Display configuration examination results
+      debug:
+        var: config_examination.stdout_lines
+      when: config_examination.stdout is defined
+
+    - name: Create custom .env file with credentials
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && cat > .env << EOF
+# Wazuh indexer variables
+INDEXER_USERNAME={{ wazuh_username }}
+INDEXER_PASSWORD={{ wazuh_password }}
+ADMIN_USERNAME={{ wazuh_username }}
+ADMIN_PASSWORD={{ wazuh_password }}
+# Dashboard variables
+DASHBOARD_USERNAME={{ wazuh_username }}
+DASHBOARD_PASSWORD={{ wazuh_password }}
+# API variables
+API_USERNAME={{ wazuh_username }}
+API_PASSWORD={{ wazuh_password }}
+# Other variables 
+WAZUH_API_USERNAME={{ wazuh_username }}
+WAZUH_API_PASSWORD={{ wazuh_password }}
+ELASTIC_USERNAME={{ wazuh_username }}
+ELASTIC_PASSWORD={{ wazuh_password }}
+EOF"
+      ignore_errors: no
+
+    - name: Modify docker-compose.yml to use environment variables from .env file
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && \
+        if [ -f 'docker-compose.yml' ]; then \
+          sed -i 's/DASHBOARD_USERNAME=admin/DASHBOARD_USERNAME=${DASHBOARD_USERNAME}/g' docker-compose.yml && \
+          sed -i 's/DASHBOARD_PASSWORD=SecretPassword/DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}/g' docker-compose.yml && \
+          sed -i 's/API_USERNAME=wazuh/API_USERNAME=${API_USERNAME}/g' docker-compose.yml && \
+          sed -i 's/API_PASSWORD=wazuh/API_PASSWORD=${API_PASSWORD}/g' docker-compose.yml && \
+          sed -i 's/INDEXER_USERNAME=admin/INDEXER_USERNAME=${INDEXER_USERNAME}/g' docker-compose.yml && \
+          sed -i 's/INDEXER_PASSWORD=SecretPassword/INDEXER_PASSWORD=${INDEXER_PASSWORD}/g' docker-compose.yml; \
+        fi"
+      ignore_errors: yes
+
+    - name: Update opensearch_dashboards.yml config
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && \
+        if [ -f 'config/wazuh_dashboard/opensearch_dashboards.yml' ]; then \
+          sed -i 's/^opensearch.username:.*/opensearch.username: {{ wazuh_username }}/g' config/wazuh_dashboard/opensearch_dashboards.yml && \
+          sed -i 's/^opensearch.password:.*/opensearch.password: {{ wazuh_password }}/g' config/wazuh_dashboard/opensearch_dashboards.yml; \
+        fi"
+      ignore_errors: yes
+
+    - name: Update Wazuh API configuration
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && \
+        if [ -d 'config/wazuh_manager' ]; then \
+          mkdir -p config/wazuh_manager/api_configuration && \
+          echo 'user: {{ wazuh_username }}' > config/wazuh_manager/api_configuration/custom_user.yml && \
+          echo 'password: {{ wazuh_password }}' >> config/wazuh_manager/api_configuration/custom_user.yml; \
+        fi"
       ignore_errors: yes
 
     - name: Generate SSL certificates
@@ -425,6 +444,26 @@ generate_ansible_playbook() {
       shell: |
         sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker compose up -d"
       ignore_errors: no
+
+    - name: Wait for Wazuh API to be available (3 minutes)
+      pause:
+        seconds: 180
+        prompt: "Waiting for Wazuh to fully initialize..."
+
+    - name: Get container status
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && docker compose ps"
+      register: container_status
+
+    - name: Check for actual credentials used in each service
+      shell: |
+        sshpass -p "{{ vm_password }}" ssh -o StrictHostKeyChecking=no root@{{ vm_ip }} "cd /opt/wazuh && \
+        echo 'Checking Docker environment variables:' && \
+        docker compose config | grep -E 'USERNAME|PASSWORD' || echo 'No credentials found in docker-compose' && \
+        echo -e '\nChecking for Wazuh dashboard users:' && \
+        docker compose exec wazuh.dashboard sh -c 'cat /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml | grep -A 5 -B 5 password' || echo 'Could not check dashboard users'"
+      register: creds_check
+      ignore_errors: yes
 
     - name: Display Wazuh deployment information
       debug:
@@ -447,8 +486,28 @@ generate_ansible_playbook() {
           
           Wazuh Version: {{ wazuh_version }}
           
-          Note: The environment takes about 1 minute to fully initialize.
-          You can check the status with: ssh root@{{ vm_ip }} "cd /opt/wazuh && docker compose ps"
+          Container Status:
+          {{ container_status.stdout }}
+          
+          TROUBLESHOOTING INFO:
+          ---------------------
+          If you cannot log in with the credentials above, try these fallback credentials:
+          - Username: admin
+          - Password: SecretPassword
+          
+          - Username: wazuh
+          - Password: wazuh
+          
+          - Username: wazuh-wui
+          - Password: wazuh-wui
+          
+          Note: It might take up to 5 minutes for all services to fully initialize.
+          
+          For troubleshooting:
+          1. Check container status: ssh root@{{ vm_ip }} "cd /opt/wazuh && docker compose ps"
+          2. View logs: ssh root@{{ vm_ip }} "cd /opt/wazuh && docker compose logs -f"
+          3. Check current credentials: ssh root@{{ vm_ip }} "cd /opt/wazuh && docker compose config | grep -E 'USERNAME|PASSWORD'"
+          4. Restart containers: ssh root@{{ vm_ip }} "cd /opt/wazuh && docker compose restart"
           
           ========================================================
 EOL
@@ -456,7 +515,6 @@ EOL
     print_success "Ansible playbook generated: deploy_wazuh.yml"
 }
 
-# Collect VM configuration
 collect_configuration() {
     print_header "VM CONFIGURATION"
     
@@ -473,15 +531,12 @@ collect_configuration() {
     
     print_header "WAZUH CONFIGURATION"
     
-    # Select Wazuh version
     select_wazuh_version
     
     read_input "Enter the Wazuh admin username" "admin" "wazuh_username"
     read_input "Enter the Wazuh admin password" "SecretPassword" "wazuh_password" true
     
-    # Check for local configuration files
     if [ -d "./configs" ]; then
-        # Count files excluding .gitkeep
         file_count=$(find ./configs -type f -not -name ".gitkeep" | wc -l)
         if [ "$file_count" -gt 0 ]; then
             print_info "Found $file_count files in the local 'configs' directory. These will be copied to the Wazuh VM."
@@ -493,7 +548,6 @@ collect_configuration() {
     fi
 }
 
-# Display summary of configuration
 display_summary() {
     print_header "CONFIGURATION SUMMARY"
     
@@ -520,18 +574,15 @@ display_summary() {
     fi
 }
 
-# Run Ansible playbook
 run_ansible() {
     print_header "RUNNING ANSIBLE PLAYBOOK"
     
-    # Check if ansible is installed
     if ! command -v ansible-playbook &> /dev/null; then
         print_error "Ansible is not installed. Please install Ansible first."
         print_info "You can install Ansible with: apt-get install ansible"
         exit 1
     fi
     
-    # Run the generated playbook
     ansible-playbook deploy_wazuh.yml
     
     if [ $? -eq 0 ]; then
@@ -541,20 +592,15 @@ run_ansible() {
     fi
 }
 
-# Main execution flow
 echo -e "${BLUE}"
 echo "============================================================================="
 echo "               AUTOMATED WAZUH DEPLOYMENT ON PROXMOX                         "
 echo "============================================================================="
 echo -e "${NC}"
 
-# Collect configuration
 collect_configuration
-
-# Display summary
 display_summary
 
-# Confirm before proceeding
 echo ""
 read -p "Do you want to proceed with the deployment? (y/n): " confirm
 if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
@@ -562,8 +608,5 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     exit 0
 fi
 
-# Generate Ansible playbook
 generate_ansible_playbook
-
-# Run Ansible playbook
 run_ansible
