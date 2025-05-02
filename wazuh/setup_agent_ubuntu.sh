@@ -21,11 +21,38 @@ echo -e "${BLUE}==================================================${NC}"
 echo -e "${BLUE}      WAZUH AGENT INSTALLATION FOR UBUNTU         ${NC}"
 echo -e "${BLUE}==================================================${NC}"
 
+# Verify internet connectivity
+echo -e "\n${BLUE}Checking internet connectivity...${NC}"
+if ! ping -c 1 8.8.8.8 &> /dev/null; then
+    echo -e "${YELLOW}Internet connectivity check failed. This may affect package downloads.${NC}"
+    echo -e "Do you want to continue anyway? (y/n): "
+    read continue_anyway
+    if [[ "$continue_anyway" != "y" && "$continue_anyway" != "Y" ]]; then
+        echo -e "${RED}Installation aborted.${NC}"
+        exit 1
+    fi
+fi
+
+# Verify Wazuh manager is reachable
+echo -e "\n${BLUE}Checking manager connection...${NC}"
 # Prompt for manager IP
 echo -ne "${YELLOW}Enter Wazuh manager IP address [10.69.0.240]: ${NC}"
 read manager_ip
 if [ -z "$manager_ip" ]; then
     manager_ip="10.69.0.240"
+fi
+
+# Check if manager is reachable
+ping -c 1 $manager_ip &> /dev/null
+if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}Warning: Cannot ping Wazuh manager at $manager_ip${NC}"
+    echo -e "This may be due to firewall restrictions or the manager being unreachable."
+    echo -e "Do you want to continue anyway? (y/n): "
+    read continue_anyway
+    if [[ "$continue_anyway" != "y" && "$continue_anyway" != "Y" ]]; then
+        echo -e "${RED}Installation aborted.${NC}"
+        exit 1
+    fi
 fi
 
 # Prompt for agent name (optional)
@@ -51,29 +78,106 @@ fi
 echo -e "\n${YELLOW}Starting installation in 3 seconds...${NC}"
 sleep 3
 
-# Download and install Wazuh agent
-echo -e "\n${BLUE}Downloading and installing Wazuh agent...${NC}"
-wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.11.2-1_amd64.deb -O wazuh-agent.deb
+# Install dependencies first
+echo -e "\n${BLUE}Installing dependencies...${NC}"
+apt-get update -y
+apt-get install -y wget apt-transport-https gnupg curl
 
-# Set manager IP and install
-if [ -n "$agent_name" ]; then
-    WAZUH_MANAGER="$manager_ip" WAZUH_AGENT_NAME="$agent_name" WAZUH_AGENT_GROUP="$agent_group" dpkg -i ./wazuh-agent.deb
+# Download and install Wazuh agent with retry
+echo -e "\n${BLUE}Downloading and installing Wazuh agent...${NC}"
+max_retries=3
+retry_count=0
+
+while [ $retry_count -lt $max_retries ]; do
+    echo -e "${YELLOW}Download attempt $((retry_count+1))/${max_retries}...${NC}"
+    wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.11.2-1_amd64.deb -O wazuh-agent.deb
+    
+    if [ -s wazuh-agent.deb ]; then
+        echo -e "${GREEN}Download successful${NC}"
+        break
+    else
+        retry_count=$((retry_count+1))
+        echo -e "${YELLOW}Download failed. Retrying in 5 seconds...${NC}"
+        sleep 5
+    fi
+done
+
+if [ ! -s wazuh-agent.deb ]; then
+    echo -e "${RED}[ERROR] Failed to download Wazuh agent after $max_retries attempts${NC}"
+    echo -e "${YELLOW}Would you like to try an alternative installation method using repository? (y/n):${NC} "
+    read use_alternative
+    
+    if [[ "$use_alternative" == "y" || "$use_alternative" == "Y" ]]; then
+        echo -e "\n${BLUE}Setting up Wazuh repository...${NC}"
+        
+        # Import the GPG key
+        curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg --import
+        chmod 644 /usr/share/keyrings/wazuh.gpg
+        
+        # Add the repository
+        echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" | tee -a /etc/apt/sources.list.d/wazuh.list > /dev/null
+        
+        # Update and install
+        apt-get update
+        echo -e "\n${BLUE}Installing Wazuh agent from repository...${NC}"
+        apt-get install -y wazuh-agent
+        
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}[ERROR] Failed to install Wazuh agent from repository${NC}"
+            exit 1
+        else
+            echo -e "${GREEN}Successfully installed Wazuh agent from repository${NC}"
+        fi
+    else
+        echo -e "${RED}Installation aborted.${NC}"
+        exit 1
+    fi
 else
-    WAZUH_MANAGER="$manager_ip" WAZUH_AGENT_GROUP="$agent_group" dpkg -i ./wazuh-agent.deb
+    # Set manager IP and install
+    echo -e "\n${BLUE}Installing Wazuh agent package...${NC}"
+    if [ -n "$agent_name" ]; then
+        WAZUH_MANAGER="$manager_ip" WAZUH_AGENT_NAME="$agent_name" WAZUH_AGENT_GROUP="$agent_group" dpkg -i ./wazuh-agent.deb
+    else
+        WAZUH_MANAGER="$manager_ip" WAZUH_AGENT_GROUP="$agent_group" dpkg -i ./wazuh-agent.deb
+    fi
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}[ERROR] Failed to install Wazuh agent package${NC}"
+        exit 1
+    fi
 fi
 
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[ERROR] Failed to install Wazuh agent${NC}"
-    exit 1
+# Ensure proper configuration
+echo -e "\n${BLUE}Setting up final configurations...${NC}"
+
+# Make sure manager address is set correctly
+echo -e "${YELLOW}Ensuring manager address is properly configured...${NC}"
+sed -i "s/<address>.*<\/address>/<address>$manager_ip<\/address>/" /var/ossec/etc/ossec.conf
+
+# Set agent group manually if needed
+if [ -n "$agent_group" ]; then
+    echo -e "${YELLOW}Setting agent group to $agent_group...${NC}"
+    echo "$agent_group" > /var/ossec/etc/shared/agent.conf
+fi
+
+# Set agent name if provided
+if [ -n "$agent_name" ]; then
+    echo -e "${YELLOW}Setting agent name to $agent_name...${NC}"
+    sed -i "s/<client_name>.*<\/client_name>/<client_name>$agent_name<\/client_name>/" /var/ossec/etc/ossec.conf 2>/dev/null
+    if [ $? -ne 0 ]; then
+        # If the tag doesn't exist, add it
+        sed -i "/<client>/a \ \ <client_name>$agent_name<\/client_name>" /var/ossec/etc/ossec.conf
+    fi
 fi
 
 # Start agent
 echo -e "\n${BLUE}Starting Wazuh agent...${NC}"
 systemctl daemon-reload
 systemctl enable wazuh-agent
-systemctl start wazuh-agent
+systemctl restart wazuh-agent
 
 # Check service status
+sleep 3
 if systemctl is-active --quiet wazuh-agent; then
     echo -e "\n${GREEN}[SUCCESS] Wazuh agent installed and running!${NC}"
     echo -e "${YELLOW}Agent details:${NC}"
@@ -81,12 +185,27 @@ if systemctl is-active --quiet wazuh-agent; then
     echo -e "  Group: ${GREEN}$agent_group${NC}"
     echo -e "  Status: ${GREEN}Running${NC}"
 else
-    echo -e "\n${RED}[ERROR] Wazuh agent is not running${NC}"
-    echo -e "${YELLOW}Check status with:${NC} systemctl status wazuh-agent"
-    exit 1
+    echo -e "\n${RED}[WARNING] Wazuh agent service is not running${NC}"
+    echo -e "${YELLOW}Attempting to fix...${NC}"
+    
+    # Troubleshooting steps
+    echo -e "1. Checking configuration..."
+    /var/ossec/bin/ossec-logtest -t
+    
+    echo -e "2. Restarting service..."
+    systemctl restart wazuh-agent
+    
+    sleep 3
+    if systemctl is-active --quiet wazuh-agent; then
+        echo -e "${GREEN}Service is now running!${NC}"
+    else
+        echo -e "${RED}Service still not running.${NC}"
+        echo -e "${YELLOW}Check status with:${NC} systemctl status wazuh-agent"
+        echo -e "${YELLOW}View logs with:${NC} tail -f /var/ossec/logs/ossec.log"
+    fi
 fi
 
-# Cleanup
+# Clean up
 rm -f wazuh-agent.deb
 
 # Installation of YARA (if needed)
@@ -110,11 +229,41 @@ if [[ "$install_yara" == "y" || "$install_yara" == "Y" ]]; then
     
     if command -v yara &> /dev/null; then
         echo -e "${GREEN}[SUCCESS] YARA installed!${NC}"
+        
+        # Create a basic YARA rule as example
+        mkdir -p /var/ossec/yara/rules
+        cat > /var/ossec/yara/rules/suspicious.yar << 'EOL'
+rule SuspiciousFiles {
+    meta:
+        description = "Detects suspicious file characteristics"
+        author = "Wazuh"
+        reference = "Internal"
+    strings:
+        $s1 = "eval(base64_decode" nocase
+        $s2 = "system(" nocase
+        $s3 = "shell_exec(" nocase
+        $s4 = "preg_replace" nocase
+        $s5 = "str_rot13" nocase
+        $s6 = "/dev/shm/" nocase
+        $s7 = "/tmp/." nocase
+    condition:
+        2 of them
+}
+EOL
+        chmod 750 /var/ossec/yara/rules/suspicious.yar
+        echo -e "${GREEN}Created sample YARA rule at /var/ossec/yara/rules/suspicious.yar${NC}"
     else
         echo -e "${RED}[ERROR] YARA installation failed${NC}"
     fi
 fi
 
 echo -e "\n${GREEN}Installation complete!${NC}"
-echo -e "${YELLOW}To check agent status:${NC} systemctl status wazuh-agent"
-echo -e "${YELLOW}To view agent logs:${NC} tail -f /var/ossec/logs/ossec.log"
+echo -e "${YELLOW}Here's how to verify everything is working:${NC}"
+echo -e "1. Check agent status: ${GREEN}systemctl status wazuh-agent${NC}"
+echo -e "2. View agent logs: ${GREEN}tail -f /var/ossec/logs/ossec.log${NC}"
+echo -e "3. Test connection to manager: ${GREEN}ping $manager_ip${NC}"
+echo -e "4. Check agent info: ${GREEN}/var/ossec/bin/agent_control -i${NC}"
+
+echo -e "\n${BLUE}Thank you for installing Wazuh!${NC}"
+
+exit 0
