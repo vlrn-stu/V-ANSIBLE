@@ -1,0 +1,12 @@
+# Wazuh Wodles
+
+This directory contains scripts and configurations specifically for Wazuh wodles. These wodles are used to extend the functionality of Wazuh by integrating with external systems or performing specialized tasks.
+
+## Instructions
+- Carefully review each script in this directory.
+- Each script includes comments specifying where it should be saved or placed on the target system.
+- Follow the instructions in the comments to ensure proper functionality.
+
+## Notes
+- Ensure that you have the necessary permissions and prerequisites before using these scripts.
+- If you encounter any issues, refer to the Wazuh documentation or seek assistance from the community.

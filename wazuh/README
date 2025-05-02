@@ -1,0 +1,10 @@
+# Wazuh Deployment
+
+Welcome to the Wazuh deployment repository. This repository contains scripts and configurations to assist with setting up and managing Wazuh across various environments.
+
+## Important Directories
+- **`wodles/`**: Contains additional scripts and configurations for Wazuh wodles. Be sure to read the `README` inside this directory for specific instructions.
+
+## General Notes
+- Always review the comments in the scripts for guidance on where to save or place them.
+- Ensure you follow the instructions provided in the respective directories for proper usage.
